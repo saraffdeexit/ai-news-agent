@@ -14,7 +14,7 @@ import anthropic
 
 from fetch_news import Article
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-haiku-4-5-20251001"
 
 SYSTEM_PROMPT = """You are producing a concise weekly digest of AI industry \
 news for a busy reader. You will be given a list of headlines with sources, \
@@ -48,6 +48,7 @@ supply, power or energy constraints, data center capacity, talent shortages, reg
 or data availability limits. If nothing qualifies, return an empty list — don't force it.
 - Only include an article under a theme/bottleneck if it's genuinely representative; don't list \
 every headline under every theme.
+-Cap each theme and bottleneck at 3 article links max — pick the most representative ones, not every match.
 - Keep summaries tight and factual. No speculation beyond what the headlines support.
 """
 
@@ -74,7 +75,7 @@ def summarize_articles(articles: list[Article]) -> dict:
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=4000,
         system=SYSTEM_PROMPT,
         messages=[
             {
