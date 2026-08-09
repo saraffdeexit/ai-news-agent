@@ -92,7 +92,21 @@ def summarize_articles(articles: list[Article]) -> dict:
             text = text[4:]
         text = text.strip()
 
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Response got cut off (hit max_tokens) or Claude added stray text.
+        # Try trimming to the last complete top-level object as a fallback.
+        last_brace = text.rfind("}")
+        if last_brace != -1:
+            for end in range(last_brace, -1, -1):
+                if text[end] == "}":
+                    candidate = text[: end + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        continue
+        raise
 
 
 if __name__ == "__main__":
