@@ -81,23 +81,31 @@ def render_html(digest: dict) -> str:
 
 
 def send_digest(digest: dict) -> None:
-    gmail_address = os.environ["GMAIL_ADDRESS"]
+    gmail_address = os.environ["GMAIL_ADDRESS"].strip()
     gmail_app_password = os.environ["GMAIL_APP_PASSWORD"]
-    recipient = os.environ.get("DIGEST_RECIPIENT", gmail_address)
+    # Strip all whitespace, including non-breaking spaces (\xa0) that sneak in
+    # when copy-pasting the app password from Google's "abcd efgh ijkl mnop"
+    # display format.
+    gmail_app_password = "".join(gmail_app_password.split())
+
+    # DIGEST_RECIPIENT can be a single address or a comma-separated list,
+    # e.g. "you@gmail.com, spouse@gmail.com"
+    raw_recipients = os.environ.get("DIGEST_RECIPIENT", gmail_address)
+    recipients = [r.strip() for r in raw_recipients.split(",") if r.strip()]
 
     html = render_html(digest)
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"AI Weekly Digest — {dt.date.today().strftime('%b %d, %Y')}"
     msg["From"] = gmail_address
-    msg["To"] = recipient
+    msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(html, "html"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(gmail_address, gmail_app_password)
-        server.sendmail(gmail_address, recipient, msg.as_string())
+        server.sendmail(gmail_address, recipients, msg.as_string())
 
-    print(f"Digest sent to {recipient}")
+    print(f"Digest sent to {', '.join(recipients)}")
 
 
 if __name__ == "__main__":
