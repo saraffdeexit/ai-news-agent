@@ -4,6 +4,11 @@ summarize.py
 Sends the week's fetched headlines to Claude and asks for a themed
 digest with a dedicated "Bottlenecks & Constraints" section.
 
+Uses tool-calling (a forced function call) rather than asking Claude to
+freehand JSON as text. This guarantees schema-valid, already-parsed
+output and avoids the failure mode where an article title containing a
+quote or special character corrupts hand-written JSON.
+
 Requires ANTHROPIC_API_KEY in the environment.
 """
 
@@ -20,37 +25,75 @@ SYSTEM_PROMPT = """You are producing a concise weekly digest of AI industry \
 news for a busy reader. You will be given a list of headlines with sources, \
 publish dates, and links, gathered from the last 7 days.
 
-Return ONLY valid JSON (no markdown fences, no preamble) matching this shape:
-
-{
-  "themes": [
-    {
-      "theme": "Model Releases",
-      "summary": "1-3 sentence synthesis of what happened this week in this theme.",
-      "articles": [{"title": "...", "link": "...", "source": "..."}]
-    }
-  ],
-  "bottlenecks": [
-    {
-      "issue": "Short label, e.g. 'HBM memory supply'",
-      "summary": "1-2 sentences on the constraint and why it matters.",
-      "articles": [{"title": "...", "link": "...", "source": "..."}]
-    }
-  ],
-  "one_line_takeaway": "A single sentence capturing the week's most important development."
-}
-
-Guidelines:
+Call the build_digest tool with your analysis. Guidelines:
 - Group headlines into 3-6 sensible themes (e.g. Model Releases, Infrastructure & Compute, \
 Funding & Business, Regulation & Policy, Talent). Skip themes with no relevant news.
 - The "bottlenecks" section is the most important part: pull out anything related to chip/GPU \
 supply, power or energy constraints, data center capacity, talent shortages, regulatory friction, \
 or data availability limits. If nothing qualifies, return an empty list — don't force it.
 - Only include an article under a theme/bottleneck if it's genuinely representative; don't list \
-every headline under every theme.
--Cap each theme and bottleneck at 3 article links max — pick the most representative ones, not every match.
+every headline under every theme. Cap each theme and bottleneck at 3 article links max — pick the \
+most representative ones, not every match.
 - Keep summaries tight and factual. No speculation beyond what the headlines support.
 """
+
+DIGEST_TOOL = {
+    "name": "build_digest",
+    "description": "Submit the structured weekly AI news digest.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "themes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "theme": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "articles": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "link": {"type": "string"},
+                                    "source": {"type": "string"},
+                                },
+                                "required": ["title", "link"],
+                            },
+                        },
+                    },
+                    "required": ["theme", "summary", "articles"],
+                },
+            },
+            "bottlenecks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "issue": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "articles": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "link": {"type": "string"},
+                                    "source": {"type": "string"},
+                                },
+                                "required": ["title", "link"],
+                            },
+                        },
+                    },
+                    "required": ["issue", "summary", "articles"],
+                },
+            },
+            "one_line_takeaway": {"type": "string"},
+        },
+        "required": ["themes", "bottlenecks", "one_line_takeaway"],
+    },
+}
 
 
 def summarize_articles(articles: list[Article]) -> dict:
@@ -77,6 +120,8 @@ def summarize_articles(articles: list[Article]) -> dict:
         model=MODEL,
         max_tokens=4000,
         system=SYSTEM_PROMPT,
+        tools=[DIGEST_TOOL],
+        tool_choice={"type": "tool", "name": "build_digest"},
         messages=[
             {
                 "role": "user",
@@ -85,29 +130,11 @@ def summarize_articles(articles: list[Article]) -> dict:
         ],
     )
 
-    text = "".join(block.text for block in message.content if block.type == "text")
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
+    for block in message.content:
+        if block.type == "tool_use" and block.name == "build_digest":
+            return block.input
 
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Response got cut off (hit max_tokens) or Claude added stray text.
-        # Try trimming to the last complete top-level object as a fallback.
-        last_brace = text.rfind("}")
-        if last_brace != -1:
-            for end in range(last_brace, -1, -1):
-                if text[end] == "}":
-                    candidate = text[: end + 1]
-                    try:
-                        return json.loads(candidate)
-                    except json.JSONDecodeError:
-                        continue
-        raise
+    raise RuntimeError(f"Claude did not return a build_digest tool call. stop_reason={message.stop_reason}")
 
 
 if __name__ == "__main__":
