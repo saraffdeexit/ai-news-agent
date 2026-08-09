@@ -118,7 +118,7 @@ def summarize_articles(articles: list[Article]) -> dict:
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=4000,
+        max_tokens=8000,
         system=SYSTEM_PROMPT,
         tools=[DIGEST_TOOL],
         tool_choice={"type": "tool", "name": "build_digest"},
@@ -130,8 +130,21 @@ def summarize_articles(articles: list[Article]) -> dict:
         ],
     )
 
+    print(f"[summarize] stop_reason={message.stop_reason}, "
+          f"usage={message.usage}, content_blocks={len(message.content)}")
+
+    if message.stop_reason == "max_tokens":
+        print("[summarize] WARNING: response hit max_tokens — tool call was likely truncated.")
+
     for block in message.content:
+        print(f"[summarize] block type={block.type}"
+              + (f", tool_name={block.name}, input_keys={list(block.input.keys()) if hasattr(block, 'input') else None}"
+                 if block.type == "tool_use" else ""))
         if block.type == "tool_use" and block.name == "build_digest":
+            if not block.input:
+                raise RuntimeError(
+                    f"build_digest was called with empty input. stop_reason={message.stop_reason}"
+                )
             return block.input
 
     raise RuntimeError(f"Claude did not return a build_digest tool call. stop_reason={message.stop_reason}")
