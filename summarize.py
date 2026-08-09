@@ -74,7 +74,7 @@ def summarize_articles(articles: list[Article]) -> dict:
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=4000,
+        max_tokens=8000,
         system=SYSTEM_PROMPT,
         messages=[
             {
