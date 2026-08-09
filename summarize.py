@@ -28,9 +28,14 @@ publish dates, and links, gathered from the last 7 days.
 Call the build_digest tool with your analysis. Guidelines:
 - Group headlines into 3-6 sensible themes (e.g. Model Releases, Infrastructure & Compute, \
 Funding & Business, Regulation & Policy, Talent). Skip themes with no relevant news.
-- The "bottlenecks" section is the most important part: pull out anything related to chip/GPU \
-supply, power or energy constraints, data center capacity, talent shortages, regulatory friction, \
-or data availability limits. If nothing qualifies, return an empty list — don't force it.
+- ALWAYS fill in "one_line_takeaway" — never leave it blank. Pick the single most important \
+development across all the headlines, even if it's also covered inside a theme below.
+- ALWAYS populate "bottlenecks" as its own list whenever ANY headline touches chip/GPU supply, \
+power or energy constraints, data center capacity, talent shortages, regulatory friction, or data \
+availability limits — even if you already covered that same content inside a "themes" entry (e.g. an \
+"Infrastructure & Compute" theme). The bottlenecks list is a required, separately-curated highlight \
+reel, not just a mirror of the themes — do not leave it empty unless truly nothing in the headlines \
+relates to any constraint. Only return an empty list if you're confident no headline qualifies.
 - Only include an article under a theme/bottleneck if it's genuinely representative; don't list \
 every headline under every theme. Cap each theme and bottleneck at 3 article links max — pick the \
 most representative ones, not every match.
@@ -118,7 +123,7 @@ def summarize_articles(articles: list[Article]) -> dict:
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=6000,
         system=SYSTEM_PROMPT,
         tools=[DIGEST_TOOL],
         tool_choice={"type": "tool", "name": "build_digest"},
@@ -145,7 +150,10 @@ def summarize_articles(articles: list[Article]) -> dict:
                 raise RuntimeError(
                     f"build_digest was called with empty input. stop_reason={message.stop_reason}"
                 )
-            return block.input
+            result = block.input
+            if not result.get("one_line_takeaway") and result.get("themes"):
+                result["one_line_takeaway"] = result["themes"][0].get("summary", "")
+            return result
 
     raise RuntimeError(f"Claude did not return a build_digest tool call. stop_reason={message.stop_reason}")
 
