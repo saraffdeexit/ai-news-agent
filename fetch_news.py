@@ -28,7 +28,7 @@ QUERIES = [
 ]
 
 LOOKBACK_DAYS = 7
-MAX_PER_QUERY = 12
+MAX_PER_QUERY = 6
 
 
 @dataclass
