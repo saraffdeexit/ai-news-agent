@@ -5,9 +5,14 @@ Sends the week's fetched headlines to Claude and asks for a themed
 digest with a dedicated "Bottlenecks & Constraints" section.
 
 Uses tool-calling (a forced function call) rather than asking Claude to
-freehand JSON as text. This guarantees schema-valid, already-parsed
-output and avoids the failure mode where an article title containing a
-quote or special character corrupts hand-written JSON.
+freehand JSON as text — guarantees schema-valid, already-parsed output.
+
+Article references use short numeric IDs rather than full title/link/
+source in the model's output. Google News links are long encoded URLs
+(200+ chars), so asking Claude to reproduce them verbatim for every
+article wastes output tokens and risks truncation. Instead Claude just
+cites article IDs, and Python looks up the real title/link/source
+afterward from the original fetched list.
 
 Requires ANTHROPIC_API_KEY in the environment.
 """
@@ -22,8 +27,10 @@ from fetch_news import Article
 MODEL = "claude-haiku-4-5-20251001"
 
 SYSTEM_PROMPT = """You are producing a concise weekly digest of AI industry \
-news for a busy reader. You will be given a list of headlines with sources, \
-publish dates, and links, gathered from the last 7 days.
+news for a busy reader. You will be given a numbered list of headlines with \
+sources and publish dates, gathered from the last 7 days. Each headline has \
+a short numeric id — use that id to reference articles in your output, \
+never reproduce the title or a link yourself.
 
 Call the build_digest tool with your analysis. Guidelines:
 - Group headlines into 3-6 sensible themes (e.g. Model Releases, Infrastructure & Compute, \
@@ -36,9 +43,8 @@ availability limits — even if you already covered that same content inside a "
 "Infrastructure & Compute" theme). The bottlenecks list is a required, separately-curated highlight \
 reel, not just a mirror of the themes — do not leave it empty unless truly nothing in the headlines \
 relates to any constraint. Only return an empty list if you're confident no headline qualifies.
-- Only include an article under a theme/bottleneck if it's genuinely representative; don't list \
-every headline under every theme. Cap each theme and bottleneck at 3 article links max — pick the \
-most representative ones, not every match.
+- Each theme/bottleneck's "article_ids" should list up to 3 of the most representative article ids — \
+just the numbers, e.g. [4, 17, 22]. Don't list every matching id.
 - Keep summaries tight and factual. No speculation beyond what the headlines support.
 """
 
@@ -55,20 +61,13 @@ DIGEST_TOOL = {
                     "properties": {
                         "theme": {"type": "string"},
                         "summary": {"type": "string"},
-                        "articles": {
+                        "article_ids": {
                             "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "title": {"type": "string"},
-                                    "link": {"type": "string"},
-                                    "source": {"type": "string"},
-                                },
-                                "required": ["title", "link"],
-                            },
+                            "items": {"type": "integer"},
+                            "maxItems": 3,
                         },
                     },
-                    "required": ["theme", "summary", "articles"],
+                    "required": ["theme", "summary", "article_ids"],
                 },
             },
             "bottlenecks": {
@@ -78,20 +77,13 @@ DIGEST_TOOL = {
                     "properties": {
                         "issue": {"type": "string"},
                         "summary": {"type": "string"},
-                        "articles": {
+                        "article_ids": {
                             "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "title": {"type": "string"},
-                                    "link": {"type": "string"},
-                                    "source": {"type": "string"},
-                                },
-                                "required": ["title", "link"],
-                            },
+                            "items": {"type": "integer"},
+                            "maxItems": 3,
                         },
                     },
-                    "required": ["issue", "summary", "articles"],
+                    "required": ["issue", "summary", "article_ids"],
                 },
             },
             "one_line_takeaway": {"type": "string"},
@@ -99,6 +91,15 @@ DIGEST_TOOL = {
         "required": ["themes", "bottlenecks", "one_line_takeaway"],
     },
 }
+
+
+def _resolve_ids(article_ids: list[int], id_lookup: dict[int, Article]) -> list[dict]:
+    resolved = []
+    for aid in article_ids or []:
+        article = id_lookup.get(aid)
+        if article:
+            resolved.append({"title": article.title, "link": article.link, "source": article.source})
+    return resolved
 
 
 def summarize_articles(articles: list[Article]) -> dict:
@@ -111,19 +112,20 @@ def summarize_articles(articles: list[Article]) -> dict:
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
+    id_lookup = {i: a for i, a in enumerate(articles)}
     payload = [
         {
+            "id": i,
             "title": a.title,
             "source": a.source,
             "published": a.published,
-            "link": a.link,
         }
-        for a in articles
+        for i, a in enumerate(articles)
     ]
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=6000,
+        max_tokens=4000,
         system=SYSTEM_PROMPT,
         tools=[DIGEST_TOOL],
         tool_choice={"type": "tool", "name": "build_digest"},
@@ -150,9 +152,29 @@ def summarize_articles(articles: list[Article]) -> dict:
                 raise RuntimeError(
                     f"build_digest was called with empty input. stop_reason={message.stop_reason}"
                 )
-            result = block.input
-            if not result.get("one_line_takeaway") and result.get("themes"):
-                result["one_line_takeaway"] = result["themes"][0].get("summary", "")
+            raw = block.input
+
+            result = {
+                "themes": [
+                    {
+                        "theme": t.get("theme", ""),
+                        "summary": t.get("summary", ""),
+                        "articles": _resolve_ids(t.get("article_ids", []), id_lookup),
+                    }
+                    for t in raw.get("themes", [])
+                ],
+                "bottlenecks": [
+                    {
+                        "issue": b.get("issue", ""),
+                        "summary": b.get("summary", ""),
+                        "articles": _resolve_ids(b.get("article_ids", []), id_lookup),
+                    }
+                    for b in raw.get("bottlenecks", [])
+                ],
+                "one_line_takeaway": raw.get("one_line_takeaway", ""),
+            }
+            if not result["one_line_takeaway"] and result["themes"]:
+                result["one_line_takeaway"] = result["themes"][0]["summary"]
             return result
 
     raise RuntimeError(f"Claude did not return a build_digest tool call. stop_reason={message.stop_reason}")
