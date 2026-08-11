@@ -16,7 +16,7 @@ from wording changes. "GPU shortage" and "NVIDIA capacity crisis" both map to th
 canonical form, so they're recognized as the same underlying issue.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 # Map bottleneck descriptions to canonical categories
 # This prevents false positives when the same issue is described differently week-to-week
