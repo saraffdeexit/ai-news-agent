@@ -163,7 +163,7 @@ Note: bottleneck_topics are canonical forms (e.g., "compute_capacity" rather tha
 
 
 # Type hint helper
-from typing import Optional
+from typing import Any, Optional
 
 if __name__ == "__main__":
     # Test 1: Same canonical bottlenecks (no false positive)
