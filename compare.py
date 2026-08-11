@@ -15,8 +15,7 @@ Significant changes might be:
 
 import json
 import os
-# Type hint helper
-from typing import Any, Optional
+from typing import Optional
 import anthropic
 
 
@@ -162,8 +161,6 @@ Note: bottleneck_topics are canonical forms (e.g., "compute_capacity" rather tha
             return result
     
     raise RuntimeError("Claude did not return significance evaluation")
-
-
 
 
 if __name__ == "__main__":
